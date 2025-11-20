@@ -1,0 +1,73 @@
+================================================================================
+  SDXL IP-Adapter Handler for RunPod Serverless
+================================================================================
+
+This folder contains everything you need to deploy Stable Diffusion XL with 
+IP-Adapter support to RunPod for 88-92% cost savings vs DALL-E 3.
+
+FILES IN THIS PACKAGE:
+----------------------
+✓ handler.py          - Main RunPod serverless handler code
+✓ requirements.txt    - Python dependencies
+✓ Dockerfile         - Container configuration
+✓ README.md          - Complete documentation
+✓ DEPLOY.md          - Docker deployment guide
+✓ GITHUB_DEPLOY.md   - GitHub deployment guide (RECOMMENDED - no Docker needed!)
+✓ test_handler.py    - Local testing script
+✓ START_HERE.txt     - This file
+
+QUICK START (3 Steps):
+----------------------
+
+Step 1: Create GitHub Repository
+   - Go to https://github.com/new
+   - Name: "sdxl-ip-adapter-handler"
+   - Make it Public
+   - Don't initialize with README
+
+Step 2: Push These Files
+   Open terminal in this folder and run:
+   
+   git init
+   git add .
+   git commit -m "SDXL IP-Adapter handler"
+   git remote add origin https://github.com/YOUR_USERNAME/sdxl-ip-adapter-handler.git
+   git push -u origin main
+   
+   (Replace YOUR_USERNAME with your GitHub username)
+
+Step 3: Deploy on RunPod
+   - Visit https://www.runpod.io/console/serverless
+   - Click "New Endpoint"
+   - Select "Build from GitHub"
+   - Enter your repo URL
+   - Select RTX 4090 GPU
+   - Max Workers: 3-5
+   - Timeout: 60 seconds
+   - Click "Deploy"
+   - Copy the Endpoint ID when done
+
+Step 4: Update Replit
+   - In Replit Secrets, update RUNPOD_ENDPOINT_ID with new endpoint
+   - In lib/character-reference.ts, uncomment 'Airbnb' in SD_ENABLED_BRANDS
+   - Restart Replit app
+   - Test with Airbnb storyboard using "Artistic" style
+
+FULL DOCUMENTATION:
+-------------------
+Read GITHUB_DEPLOY.md for detailed step-by-step instructions!
+
+SUPPORT:
+--------
+RunPod Docs: https://docs.runpod.io/
+RunPod Discord: https://discord.gg/runpod
+
+EXPECTED COSTS:
+---------------
+- RTX 4090: ~$0.00069/second
+- Typical image: 3-8 seconds
+- Cost per image: $0.002-0.006
+- DALL-E 3 comparison: $0.040/image
+- Savings: 88-92%
+
+================================================================================
