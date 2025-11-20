@@ -148,5 +148,6 @@ def handler(event):
         traceback.print_exc()
         return {"error": str(e)}
 
-if __name__ == "__main__":
-    runpod.serverless.start({"handler": handler})
+from runpod.serverless import start
+start({"handler": handler})
+
