@@ -1,0 +1,15 @@
+runtime:
+  container: runpod/serverless:latest
+
+entrypoint:
+  - python
+  - handler.py
+
+env:
+  - name: PYTHONUNBUFFERED
+    value: "1"
+
+handler:
+  path: handler.py
+  function: handler
+
