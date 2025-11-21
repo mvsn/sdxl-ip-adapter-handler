@@ -1,6 +1,7 @@
 import runpod
 import torch
 import base64
+import os
 from io import BytesIO
 from PIL import Image
 from diffusers import StableDiffusionXLPipeline, AutoencoderKL
@@ -17,33 +18,40 @@ pipe = None
 ip_adapter = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Use pre-cached models from build (prevents runtime downloads)
+cache_dir = os.environ.get('HF_HOME', '/app/models')
 print(f"[STARTUP] Using device: {device}", flush=True)
+print(f"[STARTUP] Model cache directory: {cache_dir}", flush=True)
 
 def load_models():
-    """Load SDXL and IP-Adapter models (called once on cold start)"""
+    """Load SDXL and IP-Adapter models from pre-cached files (no downloads needed)"""
     global pipe, ip_adapter
     
-    print("[HANDLER] Loading SDXL base model...")
+    print("[HANDLER] Loading SDXL base model from cache...")
     
-    # Load VAE for better quality
+    # Load VAE from cache
     vae = AutoencoderKL.from_pretrained(
         "madebyollin/sdxl-vae-fp16-fix",
-        torch_dtype=torch.float16
+        torch_dtype=torch.float16,
+        cache_dir=cache_dir,
+        local_files_only=True  # Fail if not cached (prevents runtime downloads)
     )
     
-    # Load SDXL base model
+    # Load SDXL base model from cache
     pipe = StableDiffusionXLPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         vae=vae,
         torch_dtype=torch.float16,
         variant="fp16",
-        use_safetensors=True
+        use_safetensors=True,
+        cache_dir=cache_dir,
+        local_files_only=True  # Fail if not cached
     )
     pipe.to(device)
     
-    print("[HANDLER] Loading IP-Adapter Plus Face...")
+    print("[HANDLER] Loading IP-Adapter Plus Face from cache...")
     
-    # Load IP-Adapter for facial consistency
+    # Load IP-Adapter from cache (models downloaded during build)
     ip_adapter = IPAdapterPlusXL(
         pipe,
         image_encoder_path="laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
@@ -52,7 +60,7 @@ def load_models():
         num_tokens=16,
     )
     
-    print("[HANDLER] Models loaded successfully!")
+    print("[HANDLER] Models loaded successfully from cache (no downloads needed)!")
 
 def base64_to_pil(base64_str):
     """Convert base64 string to PIL Image"""
