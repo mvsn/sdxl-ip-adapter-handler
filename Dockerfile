@@ -4,18 +4,36 @@ FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Download models during build (optional but recommended for faster cold starts)
-# Uncomment these lines to pre-download models:
-# RUN python -c "from diffusers import StableDiffusionXLPipeline, AutoencoderKL; \
-#     AutoencoderKL.from_pretrained('madebyollin/sdxl-vae-fp16-fix'); \
-#     StableDiffusionXLPipeline.from_pretrained('stabilityai/stable-diffusion-xl-base-1.0', variant='fp16')"
+# Copy requirements (without IP-Adapter)
+COPY requirements.txt .
+
+# Install base dependencies first (excluding IP-Adapter)
+RUN pip install --no-cache-dir runpod torch==2.1.0 torchvision==0.16.0 \
+    diffusers==0.25.0 transformers==4.36.0 accelerate==0.25.0 \
+    safetensors==0.4.1 pillow==10.1.0
+
+# Install IP-Adapter manually with proper dependencies
+RUN echo "Installing IP-Adapter and dependencies..." && \
+    pip install --no-cache-dir opencv-python insightface && \
+    git clone https://github.com/tencent-ailab/IP-Adapter.git /tmp/ip-adapter && \
+    cd /tmp/ip-adapter && \
+    pip install --no-cache-dir -e . && \
+    echo "IP-Adapter installation complete"
+
+# Verify installation
+RUN python -c "from ip_adapter import IPAdapterPlusXL; print('IP-Adapter imported successfully')" || \
+    (echo "ERROR: IP-Adapter import failed" && exit 1)
 
 # Copy handler code
 COPY handler.py .
+
+# Add startup logging
+RUN echo "Dockerfile build complete - all dependencies installed"
 
 # Set the handler
 CMD ["python", "-u", "handler.py"]

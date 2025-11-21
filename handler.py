@@ -5,11 +5,19 @@ from io import BytesIO
 from PIL import Image
 from diffusers import StableDiffusionXLPipeline, AutoencoderKL
 from ip_adapter import IPAdapterPlusXL
+import sys
+
+print("[STARTUP] Handler script starting...", flush=True)
+print(f"[STARTUP] Python version: {sys.version}", flush=True)
+print(f"[STARTUP] PyTorch version: {torch.__version__}", flush=True)
+print(f"[STARTUP] CUDA available: {torch.cuda.is_available()}", flush=True)
 
 # Global variables to cache models
 pipe = None
 ip_adapter = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+print(f"[STARTUP] Using device: {device}", flush=True)
 
 def load_models():
     """Load SDXL and IP-Adapter models (called once on cold start)"""
@@ -148,6 +156,12 @@ def handler(event):
         traceback.print_exc()
         return {"error": str(e)}
 
-from runpod.serverless import start
-start({"handler": handler})
-
+if __name__ == "__main__":
+    print("[STARTUP] Starting RunPod serverless handler...", flush=True)
+    try:
+        runpod.serverless.start({"handler": handler})
+    except Exception as e:
+        print(f"[STARTUP ERROR] Failed to start handler: {str(e)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise
