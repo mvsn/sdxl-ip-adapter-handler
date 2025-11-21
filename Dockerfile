@@ -17,17 +17,18 @@ RUN pip install --no-cache-dir runpod torch==2.1.0 torchvision==0.16.0 \
     diffusers==0.25.0 transformers==4.36.0 accelerate==0.25.0 \
     safetensors==0.4.1 pillow==10.1.0
 
-# Install IP-Adapter manually with proper dependencies
-RUN echo "Installing IP-Adapter and dependencies..." && \
-    pip install --no-cache-dir opencv-python insightface && \
-    git clone https://github.com/tencent-ailab/IP-Adapter.git /tmp/ip-adapter && \
-    cd /tmp/ip-adapter && \
-    pip install --no-cache-dir -e . && \
+# Install IP-Adapter dependencies
+RUN echo "Installing IP-Adapter dependencies..." && \
+    pip install --no-cache-dir opencv-python insightface
+
+# Install IP-Adapter directly from GitHub (no setup.py, so we use git+ method)
+RUN echo "Installing IP-Adapter from GitHub..." && \
+    pip install --no-cache-dir git+https://github.com/tencent-ailab/IP-Adapter.git && \
     echo "IP-Adapter installation complete"
 
 # Verify installation
-RUN python -c "from ip_adapter import IPAdapterPlusXL; print('IP-Adapter imported successfully')" || \
-    (echo "ERROR: IP-Adapter import failed" && exit 1)
+RUN echo "Verifying IP-Adapter installation..." && \
+    python -c "from ip_adapter import IPAdapterPlusXL; print('✓ IP-Adapter imported successfully!')"
 
 # Copy handler code
 COPY handler.py .
