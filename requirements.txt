@@ -10,6 +10,4 @@ safetensors==0.4.1
 pillow==10.1.0
 einops==0.7.0
 timm==0.9.12
-opencv-python==4.10.0.84
 sentencepiece==0.1.99
-ip_adapter==0.1.0

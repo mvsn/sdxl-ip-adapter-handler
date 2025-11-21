@@ -1,175 +1,194 @@
+import base64
+from io import BytesIO
+
 import runpod
 import torch
-import base64
-import os
-from io import BytesIO
 from PIL import Image
 from diffusers import StableDiffusionXLPipeline, AutoencoderKL
-from ip_adapter import IPAdapterPlusXL
-import sys
+from runpod.serverless import start
 
-print("[STARTUP] Handler script starting...", flush=True)
-print(f"[STARTUP] Python version: {sys.version}", flush=True)
-print(f"[STARTUP] PyTorch version: {torch.__version__}", flush=True)
-print(f"[STARTUP] CUDA available: {torch.cuda.is_available()}", flush=True)
+# -------------------------
+# Global config
+# -------------------------
 
-# Global variables to cache models
 pipe = None
-ip_adapter = None
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
+dtype = torch.float16 if device == "cuda" else torch.float32
 
-# Use pre-cached models from build (prevents runtime downloads)
-cache_dir = os.environ.get('HF_HOME', '/app/models')
-print(f"[STARTUP] Using device: {device}", flush=True)
-print(f"[STARTUP] Model cache directory: {cache_dir}", flush=True)
+# One consistent storyboard style for all panels
+GLOBAL_STYLE_PROMPT = (
+    "clean flat illustrative storyboard, modern product design style, soft colors, "
+    "subtle lighting, minimal background clutter, business environment, "
+    "average, relatable people, natural body types, realistic proportions, "
+    "subtle facial expressions, no speech bubbles, no on-image text, no UI screenshots"
+)
 
-def load_models():
-    """Load SDXL and IP-Adapter models from pre-cached files (no downloads needed)"""
-    global pipe, ip_adapter
-    
-    print("[HANDLER] Loading SDXL base model from cache...")
-    
-    # Load VAE from cache
+# Strong but generic negative prompt to keep panels clean
+GLOBAL_NEGATIVE_PROMPT = (
+    "blurry, distorted, disfigured, extra limbs, extra fingers, missing limbs, "
+    "text, caption, subtitles, watermark, logo, words, extreme closeup, fisheye, "
+    "overly muscular, caricature, exaggerated expression, horror, gore, low quality"
+)
+
+
+# -------------------------
+# Helpers
+# -------------------------
+
+def _load_models():
+    """Lazy-load SDXL + VAE on first request."""
+    global pipe
+    if pipe is not None:
+        return
+
+    print("[HANDLER] Loading SDXL base + VAE...")
     vae = AutoencoderKL.from_pretrained(
         "madebyollin/sdxl-vae-fp16-fix",
-        torch_dtype=torch.float16,
-        cache_dir=cache_dir,
-        local_files_only=True  # Fail if not cached (prevents runtime downloads)
+        torch_dtype=dtype,
     )
-    
-    # Load SDXL base model from cache
+
     pipe = StableDiffusionXLPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         vae=vae,
-        torch_dtype=torch.float16,
-        variant="fp16",
+        torch_dtype=dtype,
+        variant="fp16" if dtype == torch.float16 else None,
         use_safetensors=True,
-        cache_dir=cache_dir,
-        local_files_only=True  # Fail if not cached
     )
+
     pipe.to(device)
-    
-    print("[HANDLER] Loading IP-Adapter Plus Face from cache...")
-    
-    # Load IP-Adapter from cache (models downloaded during build)
-    ip_adapter = IPAdapterPlusXL(
-        pipe,
-        image_encoder_path="laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
-        ip_ckpt="h94/IP-Adapter/sdxl_models/ip-adapter-plus-face_sdxl_vit-h.safetensors",
-        device=device,
-        num_tokens=16,
-    )
-    
-    print("[HANDLER] Models loaded successfully from cache (no downloads needed)!")
 
-def base64_to_pil(base64_str):
-    """Convert base64 string to PIL Image"""
-    if base64_str.startswith('data:'):
-        base64_str = base64_str.split(',')[1]
-    
-    image_data = base64.b64decode(base64_str)
-    image = Image.open(BytesIO(image_data))
-    return image.convert('RGB')
+    # Use memory-friendly settings; xformers is not guaranteed in serverless
+    if device == "cuda":
+        pipe.enable_attention_slicing()
+    else:
+        pipe.enable_sequential_cpu_offload()
 
-def pil_to_base64(image):
-    """Convert PIL Image to base64 string"""
+    print(f"[HANDLER] Models loaded on device: {device}")
+
+
+def _pil_to_base64(image: Image.Image) -> str:
     buffer = BytesIO()
     image.save(buffer, format="PNG")
-    img_str = base64.b64encode(buffer.getvalue()).decode()
-    return img_str
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-def generate_image(input_data):
-    """Generate image with IP-Adapter for character consistency"""
-    global pipe, ip_adapter
-    
-    # Load models on first request
-    if pipe is None or ip_adapter is None:
-        load_models()
-    
-    # Extract parameters
-    prompt = input_data.get('prompt', '')
-    negative_prompt = input_data.get('negative_prompt', 
-        'deformed, distorted, disfigured, bad anatomy, bad proportions, '
-        'extra limbs, cloned face, malformed limbs, missing arms, missing legs, '
-        'extra arms, extra legs, fused fingers, too many fingers, long neck, '
-        'ugly, duplicate, morbid, mutilated, poorly drawn hands, poorly drawn face, '
-        'mutation, blurry, bad quality, worst quality, low quality'
-    )
-    
-    reference_image_base64 = input_data.get('reference_image')
-    ip_adapter_scale = float(input_data.get('ip_adapter_scale', 0.75))
-    num_inference_steps = int(input_data.get('num_inference_steps', 30))
-    guidance_scale = float(input_data.get('guidance_scale', 7.5))
-    width = int(input_data.get('width', 1024))
-    height = int(input_data.get('height', 1365))  # 4:3 aspect ratio
-    seed = input_data.get('seed', None)
-    
-    print(f"[HANDLER] Generating image with IP-Adapter scale: {ip_adapter_scale}")
-    
-    # Set random seed if provided
+
+def _build_prompt(panel_prompt: str,
+                  character_prompt: str | None,
+                  style_prompt: str | None) -> str:
+    """
+    Build a consistent storyboard prompt:
+
+    panel_prompt      – what happens in this panel
+    character_prompt  – how recurring characters should look (optional)
+    style_prompt      – override GLOBAL_STYLE_PROMPT if desired (optional)
+    """
+    style = style_prompt.strip() if style_prompt else GLOBAL_STYLE_PROMPT
+
+    parts = [panel_prompt.strip()]
+    if character_prompt:
+        parts.append(character_prompt.strip())
+    parts.append(style)
+
+    # Filter out any empty fragments and join into one sentence.
+    return ". ".join([p for p in parts if p])
+
+
+# -------------------------
+# Core generation
+# -------------------------
+
+def generate_storyboard_image(input_data: dict) -> dict:
+    """Generate a single storyboard frame with SDXL."""
+    _load_models()
+
+    # Panel-level description (required)
+    panel_prompt = (
+        input_data.get("panel_prompt")
+        or input_data.get("prompt")
+        or ""
+    ).strip()
+
+    if not panel_prompt:
+        raise ValueError("Missing 'panel_prompt' or 'prompt' in input.")
+
+    # Optional knobs for consistency & style
+    character_prompt = input_data.get("character_prompt")  # e.g. “Jamal, mid-30s…”
+    style_prompt = input_data.get("style_prompt")          # override global style if needed
+
+    negative_prompt = input_data.get("negative_prompt", GLOBAL_NEGATIVE_PROMPT)
+
+    width = int(input_data.get("width", 1024))
+    height = int(input_data.get("height", 768))  # 4:3 works nicely for panels
+
+    num_inference_steps = int(input_data.get("num_inference_steps", 28))
+    guidance_scale = float(input_data.get("guidance_scale", 6.5))
+
+    seed = input_data.get("seed")
     generator = None
     if seed is not None:
         generator = torch.Generator(device=device).manual_seed(int(seed))
-    
-    # Generate with or without IP-Adapter
-    if reference_image_base64:
-        # Convert reference image from base64
-        reference_image = base64_to_pil(reference_image_base64)
-        print("[HANDLER] Using IP-Adapter with reference image")
-        
-        # Generate with IP-Adapter for character consistency
-        output_image = ip_adapter.generate(
-            pil_image=reference_image,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            scale=ip_adapter_scale,
-            num_samples=1,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            height=height,
-            width=width,
-            generator=generator,
-        )[0]
-    else:
-        # Generate without IP-Adapter (standard SDXL)
-        print("[HANDLER] Generating without IP-Adapter")
-        output_image = pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            height=height,
-            width=width,
-            generator=generator,
-        ).images[0]
-    
-    # Convert to base64
-    output_base64 = pil_to_base64(output_image)
-    
-    print("[HANDLER] Image generated successfully")
-    
+
+    full_prompt = _build_prompt(panel_prompt, character_prompt, style_prompt)
+
+    print("[HANDLER] Generating storyboard frame")
+    print(f"[HANDLER] Prompt: {full_prompt}")
+    print(f"[HANDLER] Seed: {seed}")
+
+    result = pipe(
+        prompt=full_prompt,
+        negative_prompt=negative_prompt,
+        width=width,
+        height=height,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        generator=generator,
+    )
+
+    image = result.images[0]
+    image_b64 = _pil_to_base64(image)
+
+    print("[HANDLER] Frame generated successfully")
+
     return {
-        "image": output_base64
+        "image": image_b64,
+        "prompt_used": full_prompt,
+        "seed": seed,
     }
 
+
+# -------------------------
+# RunPod handler
+# -------------------------
+
 def handler(event):
-    """RunPod handler function"""
+    """
+    RunPod serverless handler.
+
+    Expects event of the form:
+    {
+      "input": {
+        "panel_prompt": "A CX lead presenting results to her team",
+        "character_prompt": "Jamal, mid-30s, brown skin, short curly hair, "
+                            "average build, casual shirt and jeans",
+        "style_prompt": "...",         # optional
+        "seed": 1234,                  # optional
+        "width": 1024,                 # optional
+        "height": 768,                 # optional
+        "num_inference_steps": 28,     # optional
+        "guidance_scale": 6.5          # optional
+      }
+    }
+    """
     try:
-        input_data = event.get('input', {})
-        output = generate_image(input_data)
-        return output
+        input_data = event.get("input", {}) or {}
+        return generate_storyboard_image(input_data)
     except Exception as e:
-        print(f"[HANDLER] Error: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"error": str(e)}
 
-if __name__ == "__main__":
-    print("[STARTUP] Starting RunPod serverless handler...", flush=True)
-    try:
-        runpod.serverless.start({"handler": handler})
-    except Exception as e:
-        print(f"[STARTUP ERROR] Failed to start handler: {str(e)}", flush=True)
-        import traceback
-        traceback.print_exc()
-        raise
+
+# Start RunPod serverless
+start({"handler": handler})
+
